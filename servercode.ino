@@ -245,3 +245,22 @@ void loop() {
     sourceJunction = destinationJunction;
   }
 }
+// DISTANCE SENSOR CODE
+float sensor_distance() {
+  int raw = analogRead(sensor);                 // ESP32 default: 0..4095
+  float volts = (raw * 3.3f) / 4095.0f;         // convert to volts (assuming 3.3V ADC range)
+
+  if (volts <= 0.001f) {
+    return -1.0f;                               // invalid / avoid pow(0, -1)
+  }
+
+  float distance = 13.0f * powf(volts, -1.0f);  // from datasheet fit
+
+  delay(50);
+
+  if (distance <= 30.0f) {
+    Serial.println(distance);
+  }
+
+  return distance;
+}
