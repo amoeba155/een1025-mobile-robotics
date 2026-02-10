@@ -205,11 +205,11 @@ float error, lastError = 0.0;
 
 // map, index is junction, clockwise, counterclockwise, third (if there is a 3rd adjacent)
 int junctions[7][3] = { { 4, 6, -1 }, { 5, 6, -1 }, { 6, 3, -1 }, { 2, 5, -1 }, { 5, 0, -1 }, { 3, 4, 1 }, { 0, 2, 1 } };
-int routes[4][7] = {  // maximum routes, maximum stops in a route
-  { -1, -1, -1, -1, -1, -1, -1 },
-  { -1, -1, -1, -1, -1, -1, -1 },
-  { -1, -1, -1, -1, -1, -1, -1 },
-  { -1, -1, -1, -1, -1, -1, -1 }
+int routes[4][8] = {  // maximum routes, maximum stops in a route. last reserved for length
+  { -1, -1, -1, -1, -1, -1, -1 , 0},
+  { -1, -1, -1, -1, -1, -1, -1 , 0},
+  { -1, -1, -1, -1, -1, -1, -1 , 0},
+  { -1, -1, -1, -1, -1, -1, -1 , 0}
 };
 int routeNum = 0;
 int routeIndex = 0;
@@ -219,10 +219,12 @@ int cwccw = 1; // clockwise/counter clockwise
 bool visited[7];
 int path[7];
 int path_len = 0;
+int shortest = 10;
 
 // junction tracking
 int sourceJunction = -1;
 int destinationJunction = 0;
+int endFlag = 0;
 
 int state = 256;
 
@@ -274,69 +276,82 @@ void mobotSpin(int degrees, int pwm, int direction) {
 // junction logic
 void junction() {
   mobotDrive(1,desiredPWM);
+  digitalWrite(LED_BUILTIN,HIGH);
   delay(80);
   mobotStop();
-  delay(1000);
+  //delay(800);
   // start (facing 0 from 4)
   if (sourceJunction == -1) {
     sourceJunction = 0;
     destinationJunction = postArrivedAndGetNextTarget(GROUP_NO,0);
-    findRoutes(sourceJunction, destinationJunction);
-    routeNum = 3;
+    bestRoute(sourceJunction, destinationJunction);
   } else {
     // increment along route, update sourceJunction to new junction
     routeIndex += 1;
     sourceJunction = routes[routeNum][routeIndex];
+
+    if (endFlag && (sourceJunction == 1)) {
+      //endSequence();
+      Serial.println("ending");
+      mobotStop();
+      while (1) {
+        digitalWrite(LED_BUILTIN,HIGH);
+        delay(500);
+        digitalWrite(LED_BUILTIN,LOW);
+        delay(500);
+      }
+    }
     
     if (sourceJunction == destinationJunction) {  // path complete
       // communicate with server, get new destination
-      routeNum = 0;
       routeIndex = 0;
       destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
-
-      if (destinationJunction == 7) {
-        mobotStop();
-        while (1) {
-          digitalWrite(LED_BUILTIN,HIGH);
-          delay(500);
-          digitalWrite(LED_BUILTIN,LOW);
-          delay(500);
-        }
+      if (sourceJunction == destinationJunction) {
+        destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
       }
 
-      findRoutes(sourceJunction,destinationJunction);
-      routeNum = 0;
+      if (destinationJunction == 7) {
+        destinationJunction = 1;
+        endFlag = 1;
+      }
+
+      bestRoute(sourceJunction, destinationJunction);
     }
   }
-
-  Serial.println(sourceJunction);
-  Serial.println(routes[routeNum][routeIndex + 1]);
 
   // turning to/from 1
   if (routes[routeNum][routeIndex + 1] == 1) { // to
     mobotTurn(!cwccw, desiredPWM, 0);
     while (analogRead(osJunctionPins[!cwccw]) >= 400);
-    while (analogRead(osLinePins[1] > 700));
+    while (analogRead(osLinePins[1]) > 700);
     cwccw = 6 - sourceJunction;
     mobotStop();
   } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) { // from
     cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
     mobotSpin(90, desiredPWM, !cwccw);
     while (analogRead(osJunctionPins[!cwccw]) <= 400);
-    while (analogRead(osLinePins[1] > 700));
+    while (analogRead(osLinePins[1]) > 700);
     mobotStop();
   }
 
   // flip direction if facing wrong way
   if (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][!cwccw]) {
-    mobotSpin(180, desiredPWM, 0);
+    mobotSpin(180, desiredPWM, cwccw);
     while (analogRead(osJunctionPins[cwccw]) > 700);
     mobotStop();
     cwccw = !cwccw;
   }
 
+  Serial.print(cwccw);
+  Serial.print("...");
+  Serial.print(sourceJunction);
+  Serial.print(",");
+  Serial.print(routes[routeNum][routeIndex + 1]);
+  Serial.print("...");
+  Serial.println(routes[routeNum][routeIndex + 2]);
   // drive and mark lastTime for PID
   mobotDrive(1, desiredPWM);
+  digitalWrite(LED_BUILTIN,LOW);
   lastTime = millis();
 }
 
@@ -348,6 +363,7 @@ void findRoutes(int current, int destination) {
   if (current == destination) { // route found
     for (int i = 0; i < path_len; i++) {
       routes[routeNum][i] = path[i];
+      routes[routeNum][7] += 1;
     }
     routeNum += 1;
   } else {
@@ -365,6 +381,20 @@ void findRoutes(int current, int destination) {
   visited[current] = false;
 }
 
+void bestRoute(int src, int dest) {
+  routeNum = 0;
+  findRoutes(src,dest);
+  shortest = 10;
+  for (int i = 0; i < 4; i++) {
+    if ((routes[i][7] < shortest) && (routes[i][7] > 0)) {
+      shortest = routes[i][7];
+      routeNum = i;
+    }
+    routes[i][7] = 0;
+  }
+}
+
+
 // determine action
 int lineFollowPoll() {
   // correct readings (white = high, black = low)
@@ -378,7 +408,7 @@ int lineFollowPoll() {
   average = (sum - lineAnalogValues[1]) / 4; // average of side optical sensors
 
   // decision. may need to adjust comparison values dependent on light
-  if ((average >= 2350) && (lineAnalogValues[1] > 3700)) {  // at junction
+  if ((average >= 2800) && (lineAnalogValues[1] > 3700)) {  // at junction
     state = 3000;
   } else if (lineAnalogValues[1] > 3600) { // middle sensor on line, drive forward
     state = 3001;
@@ -411,7 +441,20 @@ void lineFollowAction(int pwm) {
     delay(2);
   }
 }
-
+/*
+void endSequence() {
+  mobotDrive(1,desiredPWM);
+  while (analogRead(wallPin) < 2.0) {
+    if (analogRead(obstaclePin) < 5.0) {
+      mobotSpin(90,desiredPWM,0);
+      mobotDrive(1,desiredPWM);
+      delay(500);
+      mobotSpin(90,desiredPWM,1);
+    }
+  }
+  mobotStop()
+}
+*/
 void setup() {
   // initialize pins
   pinMode(leftMotorPhase, OUTPUT);
