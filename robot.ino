@@ -3,15 +3,19 @@
 // debug
 #define DEBUG 1
 #if DEBUG
-  #define DBG_PRINT(x)   Serial.print(x)
-  #define DBG_PRINTLN(x) Serial.println(x)
+#define DBG_PRINT(x) Serial.print(x)
+#define DBG_PRINTLN(x) Serial.println(x)
 #else
-  #define DBG_PRINT(x)   do{}while(0)
-  #define DBG_PRINTLN(x) do{}while(0)
+#define DBG_PRINT(x) \
+  do { \
+  } while (0)
+#define DBG_PRINTLN(x) \
+  do { \
+  } while (0)
 #endif
 
 // wifi credentials
-static const char* ssid     = "iot";
+static const char* ssid = "iot";
 static const char* password = "shipmatish73hyperdoricism";
 
 // server config
@@ -26,27 +30,25 @@ int normalizeNode(int n) {
 }
 
 void wifiConnectBlocking() {
-  #if DEBUG
-    Serial.print("Connecting to WiFi");
-  #endif
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(300);
-  #if DEBUG
-      Serial.print(".");
-  #endif
-    }
-  #if DEBUG
-    Serial.println("\nWiFi connected.");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-  #endif
+#if DEBUG
+  Serial.print("Connecting to WiFi");
+#endif
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+#if DEBUG
+    Serial.print(".");
+#endif
+  }
+#if DEBUG
+  Serial.println("\nWiFi connected.");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+#endif
 }
 
 int postArrivedAndGetNextTarget(int group, int position) {
   if (WiFi.status() != WL_CONNECTED) return -1;
-
-  position = normalizeNode(position);
 
   WiFiClient client;
   if (!client.connect(SERVER_HOST, SERVER_PORT)) {
@@ -78,20 +80,28 @@ int postArrivedAndGetNextTarget(int group, int position) {
 
   #if DEBUG
     Serial.println();
-    Serial.print("POST "); Serial.print(path);
-    Serial.print(" body="); Serial.println(body);
+    Serial.print("POST ");
+    Serial.print(path);
+    Serial.print(" body=");
+    Serial.println(body);
   #endif
 
   // Wait until something arrives
   unsigned long start = millis();
   while (!client.available()) {
-    if (!client.connected()) { client.stop(); return -1; }
-    if (millis() - start > 5000) { client.stop(); return -1; }
+    if (!client.connected()) {
+      client.stop();
+      return -1;
+    }
+    if (millis() - start > 5000) {
+      client.stop();
+      return -1;
+    }
     delay(1);
   }
 
   // Read status line (up to '\n')
-  char statusLine[64] = {0};
+  char statusLine[64] = { 0 };
   size_t i = 0;
   while (client.available() && i < sizeof(statusLine) - 1) {
     char c = client.read();
@@ -100,7 +110,8 @@ int postArrivedAndGetNextTarget(int group, int position) {
   }
 
   #if DEBUG
-    Serial.print("Status: "); Serial.println(statusLine);
+    Serial.print("Status: ");
+    Serial.println(statusLine);
   #endif
 
   // Parse status code safely from "HTTP/1.1 200 OK"
@@ -116,15 +127,18 @@ int postArrivedAndGetNextTarget(int group, int position) {
   while (state < 4) {
     if (client.available()) {
       char c = client.read();
-      if      (state == 0 && c == '\r') state = 1;
+      if (state == 0 && c == '\r') state = 1;
       else if (state == 1 && c == '\n') state = 2;
       else if (state == 2 && c == '\r') state = 3;
       else if (state == 3 && c == '\n') state = 4;
       else state = (c == '\r') ? 1 : 0;
     } else {
       // If nothing is available, either wait briefly or bail on timeout.
-      if (!client.connected()) break; // connection closed; no more bytes coming
-      if (millis() - hdrStart > 5000) { client.stop(); return -1; }
+      if (!client.connected()) break;  // connection closed; no more bytes coming
+      if (millis() - hdrStart > 5000) {
+        client.stop();
+        return -1;
+      }
       delay(1);
     }
   }
@@ -148,7 +162,8 @@ int postArrivedAndGetNextTarget(int group, int position) {
   client.stop();
 
   #if DEBUG
-    Serial.print("Body: "); Serial.println(resp);
+    Serial.print("Body: ");
+    Serial.println(resp);
   #endif
 
   // ----- FIX #2: reject non-200 -----
@@ -181,6 +196,9 @@ int rightMotorPWM = 37;
 int osLinePins[3] = { 7, 6, 5 };
 int osJunctionPins[2] = { 15, 4 };
 
+int dsTriggerPin = 35;
+int dsEchoPin = 45;
+
 // optical sensor values
 int lineAnalogValues[3] = { 0, 0, 0 };
 int junctionAnalogValues[2] = { 0, 0 };
@@ -195,8 +213,8 @@ float weight, sum, average = 0;
 // PID control/speed values
 // 145, 220, 10, 0
 int desiredPWM = 185;  // 0-255
-float Kp = 220.0; // 220
-float Kd = 10.0; // 25
+float Kp = 220.0;      // 220
+float Kd = 10.0;       // 25
 float Ki = 0.5;
 double derivative, integral = 1.0;
 double dt = 0;
@@ -206,14 +224,14 @@ float error, lastError = 0.0;
 // map, index is junction, clockwise, counterclockwise, third (if there is a 3rd adjacent)
 int junctions[7][3] = { { 4, 6, -1 }, { 5, 6, -1 }, { 6, 3, -1 }, { 2, 5, -1 }, { 5, 0, -1 }, { 3, 4, 1 }, { 0, 2, 1 } };
 int routes[4][8] = {  // maximum routes, maximum stops in a route. last reserved for length
-  { -1, -1, -1, -1, -1, -1, -1 , 0},
-  { -1, -1, -1, -1, -1, -1, -1 , 0},
-  { -1, -1, -1, -1, -1, -1, -1 , 0},
-  { -1, -1, -1, -1, -1, -1, -1 , 0}
+  { -1, -1, -1, -1, -1, -1, -1, 0 },
+  { -1, -1, -1, -1, -1, -1, -1, 0 },
+  { -1, -1, -1, -1, -1, -1, -1, 0 },
+  { -1, -1, -1, -1, -1, -1, -1, 0 }
 };
 int routeNum = 0;
 int routeIndex = 0;
-int cwccw = 1; // clockwise/counter clockwise
+int cwccw = 1;  // clockwise/counter clockwise
 
 // route calculation
 bool visited[7];
@@ -275,58 +293,57 @@ void mobotSpin(int degrees, int pwm, int direction) {
 
 // junction logic
 void junction() {
-  mobotDrive(1,desiredPWM);
-  digitalWrite(LED_BUILTIN,HIGH);
+  mobotDrive(1, desiredPWM);
+  digitalWrite(LED_BUILTIN, HIGH);
   delay(80);
   mobotStop();
   //delay(800);
   // start (facing 0 from 4)
   if (sourceJunction == -1) {
     sourceJunction = 0;
-    destinationJunction = postArrivedAndGetNextTarget(GROUP_NO,0);
+    destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, 0);
     bestRoute(sourceJunction, destinationJunction);
   } else {
     // increment along route, update sourceJunction to new junction
     routeIndex += 1;
     sourceJunction = routes[routeNum][routeIndex];
 
-    if (endFlag && (sourceJunction == 1)) {
-      //endSequence();
-      Serial.println("ending");
-      mobotStop();
-      while (1) {
-        digitalWrite(LED_BUILTIN,HIGH);
-        delay(500);
-        digitalWrite(LED_BUILTIN,LOW);
-        delay(500);
-      }
-    }
-    
     if (sourceJunction == destinationJunction) {  // path complete
-      // communicate with server, get new destination
-      routeIndex = 0;
-      destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
-      if (sourceJunction == destinationJunction) {
+      if (endFlag) {
+        if (sourceJunction == 6) {
+          routeIndex = 0;
+          destinationJunction = 1;
+          bestRoute(sourceJunction, destinationJunction);
+        } else if (sourceJunction == 1) {
+          Serial.println("ending");
+          endSequence();
+        }
+      } else {
+        // communicate with server, get new destination
+        routeIndex = 0;
         destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
-      }
+        if (sourceJunction == destinationJunction) {
+          destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
+        }
 
-      if (destinationJunction == 7) {
-        destinationJunction = 1;
-        endFlag = 1;
-      }
+        if (destinationJunction == 7) {
+          destinationJunction = 6;
+          endFlag = 1;
+        }
 
-      bestRoute(sourceJunction, destinationJunction);
+        bestRoute(sourceJunction, destinationJunction);
+      }
     }
   }
 
   // turning to/from 1
-  if (routes[routeNum][routeIndex + 1] == 1) { // to
+  if (routes[routeNum][routeIndex + 1] == 1) {  // to
     mobotTurn(!cwccw, desiredPWM, 0);
     while (analogRead(osJunctionPins[!cwccw]) >= 400);
     while (analogRead(osLinePins[1]) > 700);
     cwccw = 6 - sourceJunction;
     mobotStop();
-  } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) { // from
+  } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from
     cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
     mobotSpin(90, desiredPWM, !cwccw);
     while (analogRead(osJunctionPins[!cwccw]) <= 400);
@@ -351,7 +368,7 @@ void junction() {
   Serial.println(routes[routeNum][routeIndex + 2]);
   // drive and mark lastTime for PID
   mobotDrive(1, desiredPWM);
-  digitalWrite(LED_BUILTIN,LOW);
+  digitalWrite(LED_BUILTIN, LOW);
   lastTime = millis();
 }
 
@@ -360,7 +377,7 @@ void findRoutes(int current, int destination) {
   visited[current] = true;
   path[path_len++] = current;
 
-  if (current == destination) { // route found
+  if (current == destination) {  // route found
     for (int i = 0; i < path_len; i++) {
       routes[routeNum][i] = path[i];
       routes[routeNum][7] += 1;
@@ -383,7 +400,7 @@ void findRoutes(int current, int destination) {
 
 void bestRoute(int src, int dest) {
   routeNum = 0;
-  findRoutes(src,dest);
+  findRoutes(src, dest);
   shortest = 10;
   for (int i = 0; i < 4; i++) {
     if ((routes[i][7] < shortest) && (routes[i][7] > 0)) {
@@ -405,15 +422,15 @@ int lineFollowPoll() {
   junctionAnalogValues[1] = 4095 - analogRead(osJunctionPins[1]);
 
   sum = junctionAnalogValues[0] + lineAnalogValues[0] + lineAnalogValues[1] + lineAnalogValues[2] + junctionAnalogValues[1] + 1;
-  average = (sum - lineAnalogValues[1]) / 4; // average of side optical sensors
+  average = (sum - lineAnalogValues[1]) / 4;  // average of side optical sensors
 
   // decision. may need to adjust comparison values dependent on light
   if ((average >= 2800) && (lineAnalogValues[1] > 3700)) {  // at junction
     state = 3000;
-  } else if (lineAnalogValues[1] > 3600) { // middle sensor on line, drive forward
+  } else if (lineAnalogValues[1] > 3600) {  // middle sensor on line, drive forward
     state = 3001;
-  } else { // PID
-    weight = (-2.5*junctionAnalogValues[0] - 1.0 * lineAnalogValues[0] + 0.0 * lineAnalogValues[1] + 1.0 * lineAnalogValues[2] + 2.5*junctionAnalogValues[1]) / sum;
+  } else {  // PID
+    weight = (-2.5 * junctionAnalogValues[0] - 1.0 * lineAnalogValues[0] + 0.0 * lineAnalogValues[1] + 1.0 * lineAnalogValues[2] + 2.5 * junctionAnalogValues[1]) / sum;
     error = 0.0 - weight;
     now = millis();
     dt = (now - lastTime);
@@ -424,7 +441,7 @@ int lineFollowPoll() {
 
     state = int(error * Kp) + int(derivative * Kd) + int(integral * Ki);
   }
-  
+
   return state;
 }
 
@@ -433,28 +450,46 @@ void lineFollowAction(int pwm) {
   if (pwm == 3000) {  // junction
     junction();
     delay(2);
-  } else if (pwm == 3001) { // straight
-    mobotDrive(1,desiredPWM);
+  } else if (pwm == 3001) {  // straight
+    mobotDrive(1, desiredPWM);
     delay(2);
-  } else { // turn dependent on location of line along sensors
-    mobotTurn(0,constrain(desiredPWM + pwm,0,255), constrain(desiredPWM - pwm,0,255));
+  } else {  // turn dependent on location of line along sensors
+    mobotTurn(0, constrain(desiredPWM + pwm, 0, 255), constrain(desiredPWM - pwm, 0, 255));
     delay(2);
   }
 }
-/*
+
 void endSequence() {
-  mobotDrive(1,desiredPWM);
-  while (analogRead(wallPin) < 2.0) {
-    if (analogRead(obstaclePin) < 5.0) {
-      mobotSpin(90,desiredPWM,0);
-      mobotDrive(1,desiredPWM);
-      delay(500);
-      mobotSpin(90,desiredPWM,1);
+  mobotTurn(0, desiredPWM - 7, desiredPWM);
+  double proximity = 400;
+  double response = 0;
+
+  while (proximity > 5.0) {
+    digitalWrite(dsTriggerPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(dsTriggerPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(dsTriggerPin, LOW);
+
+    response = pulseIn(dsEchoPin, HIGH);
+    proximity = (response * 0.017f);
+    if (response == 0) {
+      proximity = 10;
     }
+
+    delay(20);
   }
-  mobotStop()
+
+  mobotStop();
+  postArrivedAndGetNextTarget(GROUP_NO, 5);
+  while (1) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+  }
 }
-*/
+
 void setup() {
   // initialize pins
   pinMode(leftMotorPhase, OUTPUT);
@@ -468,6 +503,9 @@ void setup() {
   pinMode(osJunctionPins[0], INPUT);
   pinMode(osJunctionPins[1], INPUT);
 
+  pinMode(dsTriggerPin, OUTPUT);
+  pinMode(dsEchoPin, INPUT);
+
   delay(100);
 
   Serial.begin(9600);
@@ -477,7 +515,22 @@ void setup() {
 
   lastTime = millis();
 }
-
+double response;
+double proximity;
 void loop() {
+  /*
+  digitalWrite(dsTriggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(dsTriggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(dsTriggerPin, LOW);
+
+  response = pulseIn(dsEchoPin, HIGH);
+  proximity = (response * 0.017f);
+  Serial.print(response);
+  Serial.print("...");
+  Serial.println(proximity);
+  delay(50);
+  */
   lineFollowAction(lineFollowPoll());
 }
