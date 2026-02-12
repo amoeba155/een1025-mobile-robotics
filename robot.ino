@@ -243,6 +243,13 @@ int shortest = 10;
 int sourceJunction = -1;
 int destinationJunction = 0;
 int endFlag = 0;
+int obstacles[2][2] = {
+  {-1,-1},
+  {-1,-1}
+};
+unsigned long lastObstacleCheck = 0;
+unsigned long newObstacleCheck = 0;
+int obstacleFlag = 0;
 
 int state = 256;
 
@@ -304,50 +311,60 @@ void junction() {
     destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, 0);
     bestRoute(sourceJunction, destinationJunction);
   } else {
-    // increment along route, update sourceJunction to new junction
-    routeIndex += 1;
-    sourceJunction = routes[routeNum][routeIndex];
+    if (obstacleFlag) {
+      routeIndex = 0;
+      bestRoute(sourceJunction, destinationJunction);
+      obstacleFlag = 0;
+    } else {
+      // increment along route, update sourceJunction to new junction
+      routeIndex += 1;
+      sourceJunction = routes[routeNum][routeIndex];
 
-    if (sourceJunction == destinationJunction) {  // path complete
-      if (endFlag) {
-        if (sourceJunction == 6) {
+      if (sourceJunction == destinationJunction) {  // path complete
+        if (endFlag) {
+          if (sourceJunction == 6) {
+            routeIndex = 0;
+            destinationJunction = 1;
+            bestRoute(sourceJunction, destinationJunction);
+          } else if (sourceJunction == 1 || sourceJunction == 5) {
+            Serial.println("ending");
+            endSequence();
+          }
+        } else {
+          // communicate with server, get new destination
           routeIndex = 0;
-          destinationJunction = 1;
-          bestRoute(sourceJunction, destinationJunction);
-        } else if (sourceJunction == 1) {
-          Serial.println("ending");
-          endSequence();
-        }
-      } else {
-        // communicate with server, get new destination
-        routeIndex = 0;
-        destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
-        if (sourceJunction == destinationJunction) {
           destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
-        }
+          if (sourceJunction == destinationJunction) {
+            destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
+          }
 
-        if (destinationJunction == 7) {
-          destinationJunction = 6;
-          endFlag = 1;
-        }
+          if (destinationJunction == 7) {
+            if (sourceJunction == 1) {
+              destinationJunction = 5;
+            } else {
+              destinationJunction = 6;
+            }
+            endFlag = 1;
+          }
 
         bestRoute(sourceJunction, destinationJunction);
+        }
       }
     }
   }
 
   // turning to/from 1
   if (routes[routeNum][routeIndex + 1] == 1) {  // to
-    mobotTurn(!cwccw, desiredPWM, 0);
-    while (analogRead(osJunctionPins[!cwccw]) >= 400);
-    while (analogRead(osLinePins[1]) > 700);
+    mobotSpin(90, desiredPWM, !cwccw);
+    while (analogRead(osJunctionPins[!cwccw]) > 900);
+    while (analogRead(osLinePins[1]) > 900);
     cwccw = 6 - sourceJunction;
     mobotStop();
   } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from
     cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
     mobotSpin(90, desiredPWM, !cwccw);
-    while (analogRead(osJunctionPins[!cwccw]) <= 400);
-    while (analogRead(osLinePins[1]) > 700);
+    while (analogRead(osJunctionPins[!cwccw]) <= 900);
+    while (analogRead(osLinePins[1]) > 900);
     mobotStop();
   }
 
@@ -403,6 +420,15 @@ void bestRoute(int src, int dest) {
   findRoutes(src, dest);
   shortest = 10;
   for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 6; j++) {
+      if (routes[i][j + 1] != -1) {
+        if (((routes[i][j] == obstacles[0][0]) && (routes[i][j + 1] == obstacles[0][1])) || ((routes[i][j] == obstacles[0][1]) && (routes[i][j + 1] == obstacles[0][0]))) {
+          routes[i][7] = 999;
+        } else if (((routes[i][j] == obstacles[1][0]) && (routes[i][j + 1] == obstacles[1][1])) || ((routes[i][j] == obstacles[1][1]) && (routes[i][j + 1] == obstacles[1][0]))) {
+          routes[i][7] = 999;
+        }
+      }
+    }
     if ((routes[i][7] < shortest) && (routes[i][7] > 0)) {
       shortest = routes[i][7];
       routeNum = i;
@@ -464,7 +490,7 @@ void endSequence() {
   double proximity = 400;
   double response = 0;
 
-  while (proximity > 5.0) {
+  while (proximity > 4.5) {
     digitalWrite(dsTriggerPin, LOW);
     delayMicroseconds(2);
     digitalWrite(dsTriggerPin, HIGH);
@@ -487,6 +513,40 @@ void endSequence() {
     delay(500);
     digitalWrite(LED_BUILTIN, LOW);
     delay(500);
+  }
+}
+
+void obstacleCheck() {
+  float response = 0;
+  float proximity = 10;
+  newObstacleCheck = millis();
+  if ((newObstacleCheck - lastObstacleCheck) >= 20) {
+    digitalWrite(dsTriggerPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(dsTriggerPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(dsTriggerPin, LOW);
+
+    response = pulseIn(dsEchoPin,HIGH);
+    proximity = response * 0.017f;
+    if (response <= 0) {
+      proximity = 10;
+    }
+    if (proximity < 7.0) {
+      if (obstacles[0][0] == -1) {
+        obstacles[0][0] = sourceJunction;
+        obstacles[0][1] = routes[routeNum][routeIndex + 1];
+      } else {
+        obstacles[1][0] = sourceJunction;
+        obstacles[1][1] = routes[routeNum][routeIndex + 1];
+      }
+      mobotSpin(180, desiredPWM, !cwccw);
+      while (analogRead(osJunctionPins[!cwccw]) > 700);
+      mobotStop();
+      cwccw = !cwccw;
+      obstacleFlag = 1;
+    }
+    lastObstacleCheck = millis();
   }
 }
 
@@ -514,23 +574,10 @@ void setup() {
   wifiConnectBlocking();
 
   lastTime = millis();
+  lastObstacleCheck = millis();
 }
-double response;
-double proximity;
-void loop() {
-  /*
-  digitalWrite(dsTriggerPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(dsTriggerPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(dsTriggerPin, LOW);
 
-  response = pulseIn(dsEchoPin, HIGH);
-  proximity = (response * 0.017f);
-  Serial.print(response);
-  Serial.print("...");
-  Serial.println(proximity);
-  delay(50);
-  */
+void loop() {
   lineFollowAction(lineFollowPoll());
+  obstacleCheck();
 }
