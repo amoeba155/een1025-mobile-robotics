@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <ESP32Servo.h>
 
 // debug
 #define DEBUG 1
@@ -199,6 +200,9 @@ int osJunctionPins[2] = { 15, 4 };
 int dsTriggerPin = 35;
 int dsEchoPin = 45;
 
+int servoPin = 36;
+Servo usServo;
+
 // optical sensor values
 int lineAnalogValues[3] = { 0, 0, 0 };
 int junctionAnalogValues[2] = { 0, 0 };
@@ -259,7 +263,7 @@ void mobotDrive(int direction, int speed) {
   analogWrite(leftMotorPWM, speed);
 
   digitalWrite(rightMotorPhase, !direction);
-  analogWrite(rightMotorPWM, speed);
+  analogWrite(rightMotorPWM, speed - 7);
 }
 
 // stop
@@ -302,9 +306,8 @@ void mobotSpin(int degrees, int pwm, int direction) {
 void junction() {
   mobotDrive(1, desiredPWM);
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(80);
+  delay(150); // 150
   mobotStop();
-  //delay(800);
   // start (facing 0 from 4)
   if (sourceJunction == -1) {
     sourceJunction = 0;
@@ -322,11 +325,11 @@ void junction() {
 
       if (sourceJunction == destinationJunction) {  // path complete
         if (endFlag) {
-          if (sourceJunction == 6) {
+          if (sourceJunction == 1) {
             routeIndex = 0;
-            destinationJunction = 1;
+            destinationJunction = 5;
             bestRoute(sourceJunction, destinationJunction);
-          } else if (sourceJunction == 1 || sourceJunction == 5) {
+          } else if (sourceJunction == 5) {
             Serial.println("ending");
             endSequence();
           }
@@ -342,7 +345,7 @@ void junction() {
             if (sourceJunction == 1) {
               destinationJunction = 5;
             } else {
-              destinationJunction = 6;
+              destinationJunction = 1;
             }
             endFlag = 1;
           }
@@ -356,37 +359,31 @@ void junction() {
   // turning to/from 1
   if (routes[routeNum][routeIndex + 1] == 1) {  // to
     mobotSpin(90, desiredPWM, !cwccw);
-    while (analogRead(osJunctionPins[!cwccw]) > 900);
-    while (analogRead(osLinePins[1]) > 900);
+    while (analogRead(osJunctionPins[!cwccw]) > 1300);
+    while (analogRead(osLinePins[1]) > 1300);
     cwccw = 6 - sourceJunction;
     mobotStop();
   } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from
     cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
     mobotSpin(90, desiredPWM, !cwccw);
-    while (analogRead(osJunctionPins[!cwccw]) <= 900);
-    while (analogRead(osLinePins[1]) > 900);
+    while (analogRead(osJunctionPins[!cwccw]) <= 1300);
+    while (analogRead(osLinePins[1]) > 1300);
     mobotStop();
   }
 
   // flip direction if facing wrong way
   if (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][!cwccw]) {
     mobotSpin(180, desiredPWM, cwccw);
-    while (analogRead(osJunctionPins[cwccw]) > 700);
+    while (analogRead(osJunctionPins[cwccw]) > 1100);
     mobotStop();
     cwccw = !cwccw;
   }
 
-  Serial.print(cwccw);
-  Serial.print("...");
-  Serial.print(sourceJunction);
-  Serial.print(",");
-  Serial.print(routes[routeNum][routeIndex + 1]);
-  Serial.print("...");
-  Serial.println(routes[routeNum][routeIndex + 2]);
   // drive and mark lastTime for PID
   mobotDrive(1, desiredPWM);
   digitalWrite(LED_BUILTIN, LOW);
   lastTime = millis();
+  lastObstacleCheck = millis();
 }
 
 // find all routes from source to destination
@@ -421,12 +418,14 @@ void bestRoute(int src, int dest) {
   shortest = 10;
   for (int i = 0; i < 4; i++) {
     for (int j = 0; j < 6; j++) {
-      if (routes[i][j + 1] != -1) {
+      if (routes[i][j] != destinationJunction) {
         if (((routes[i][j] == obstacles[0][0]) && (routes[i][j + 1] == obstacles[0][1])) || ((routes[i][j] == obstacles[0][1]) && (routes[i][j + 1] == obstacles[0][0]))) {
           routes[i][7] = 999;
         } else if (((routes[i][j] == obstacles[1][0]) && (routes[i][j + 1] == obstacles[1][1])) || ((routes[i][j] == obstacles[1][1]) && (routes[i][j + 1] == obstacles[1][0]))) {
           routes[i][7] = 999;
         }
+      } else {
+        j = 7;
       }
     }
     if ((routes[i][7] < shortest) && (routes[i][7] > 0)) {
@@ -436,7 +435,6 @@ void bestRoute(int src, int dest) {
     routes[i][7] = 0;
   }
 }
-
 
 // determine action
 int lineFollowPoll() {
@@ -451,7 +449,7 @@ int lineFollowPoll() {
   average = (sum - lineAnalogValues[1]) / 4;  // average of side optical sensors
 
   // decision. may need to adjust comparison values dependent on light
-  if ((average >= 2800) && (lineAnalogValues[1] > 3700)) {  // at junction
+  if ((average >= 2600) && (lineAnalogValues[1] > 3600)) {  // at junction
     state = 3000;
   } else if (lineAnalogValues[1] > 3600) {  // middle sensor on line, drive forward
     state = 3001;
@@ -478,34 +476,41 @@ void lineFollowAction(int pwm) {
     delay(2);
   } else if (pwm == 3001) {  // straight
     mobotDrive(1, desiredPWM);
+    usServo.write(90);
     delay(2);
   } else {  // turn dependent on location of line along sensors
     mobotTurn(0, constrain(desiredPWM + pwm, 0, 255), constrain(desiredPWM - pwm, 0, 255));
+    usServo.write(180 - constrain(90 + (90*(float)pwm/200),0,180));
     delay(2);
   }
 }
 
 void endSequence() {
   mobotTurn(0, desiredPWM - 7, desiredPWM);
-  double proximity = 400;
-  double response = 0;
+  float dist = 10.0;
+  int swing = 40;
+  unsigned long startTime = millis();
 
-  while (proximity > 4.5) {
-    digitalWrite(dsTriggerPin, LOW);
-    delayMicroseconds(2);
-    digitalWrite(dsTriggerPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(dsTriggerPin, LOW);
-
-    response = pulseIn(dsEchoPin, HIGH);
-    proximity = (response * 0.017f);
-    if (response == 0) {
-      proximity = 10;
-    }
-
+  while (dist > 4.5) {
+    dist = usPing();
+    usServo.write(90 + swing);
+    swing = -swing;
     delay(20);
   }
-
+  if (millis() - startTime < 3000) {
+    dist = 10.0;
+    usServo.write(90);
+    mobotSpin(150,desiredPWM,(swing + 40) / 40);
+    mobotTurn(0, desiredPWM - 7, desiredPWM);
+    delay(1000);
+    mobotSpin(150,desiredPWM,!((swing + 40) / 40));
+    mobotTurn(0, desiredPWM - 7, desiredPWM);
+    while (dist > 4.5) {
+      dist = usPing();
+      delay(20);
+    }
+  }
+  
   mobotStop();
   postArrivedAndGetNextTarget(GROUP_NO, 5);
   while (1) {
@@ -517,27 +522,16 @@ void endSequence() {
 }
 
 void obstacleCheck() {
-  float response = 0;
-  float proximity = 10;
+  float dist = 10.0;
   newObstacleCheck = millis();
-  if ((newObstacleCheck - lastObstacleCheck) >= 20) {
-    digitalWrite(dsTriggerPin, LOW);
-    delayMicroseconds(2);
-    digitalWrite(dsTriggerPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(dsTriggerPin, LOW);
-
-    response = pulseIn(dsEchoPin,HIGH);
-    proximity = response * 0.017f;
-    if (response <= 0) {
-      proximity = 10;
-    }
-    if (proximity < 7.0) {
+  if ((newObstacleCheck - lastObstacleCheck) >= 60) {
+    dist = usPing();
+    if (dist < 7.0) {
       if (obstacles[0][0] == -1) {
-        obstacles[0][0] = sourceJunction;
+        obstacles[0][0] = routes[routeNum][routeIndex];
         obstacles[0][1] = routes[routeNum][routeIndex + 1];
       } else {
-        obstacles[1][0] = sourceJunction;
+        obstacles[1][0] = routes[routeNum][routeIndex];
         obstacles[1][1] = routes[routeNum][routeIndex + 1];
       }
       mobotSpin(180, desiredPWM, !cwccw);
@@ -546,8 +540,27 @@ void obstacleCheck() {
       cwccw = !cwccw;
       obstacleFlag = 1;
     }
+
     lastObstacleCheck = millis();
   }
+}
+
+float usPing() {
+  float proximity = 0;
+  float response = 0;
+
+  digitalWrite(dsTriggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(dsTriggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(dsTriggerPin, LOW);
+
+  response = pulseIn(dsEchoPin,HIGH);
+  proximity = response * 0.017f;
+  if (response <= 0) {
+    proximity = 10.0;
+  }
+  return proximity;
 }
 
 void setup() {
@@ -566,12 +579,16 @@ void setup() {
   pinMode(dsTriggerPin, OUTPUT);
   pinMode(dsEchoPin, INPUT);
 
-  delay(100);
+  delay(20);
 
   Serial.begin(9600);
   Serial.println();
   mobotStop();
   wifiConnectBlocking();
+
+  usServo.setPeriodHertz(50);
+  usServo.attach(36, 500, 2400);
+  usServo.write(180);
 
   lastTime = millis();
   lastObstacleCheck = millis();
