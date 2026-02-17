@@ -211,15 +211,15 @@ int junctionAnalogValues[2] = { 0, 0 };
 int wheelbase = 136;  // mm
 float distance = 0;
 int spinTime = 0;
-float pwmScale = 1.9;
+float pwmScale = 1.5;
 float weight, sum, average = 0;
 
 // PID control/speed values
 // 145, 220, 10, 0
-int desiredPWM = 185;  // 0-255
-float Kp = 220.0;      // 220
-float Kd = 10.0;       // 25
-float Ki = 0.5;
+int desiredPWM = 170;  // 0-255
+float Kp = 100.0;      // 220
+float Kd = 0.0;      // 10
+float Ki = 0.0;       // 0.5
 double derivative, integral = 1.0;
 double dt = 0;
 unsigned long now, lastTime = 0;
@@ -263,7 +263,7 @@ void mobotDrive(int direction, int speed) {
   analogWrite(leftMotorPWM, speed);
 
   digitalWrite(rightMotorPhase, !direction);
-  analogWrite(rightMotorPWM, speed - 7);
+  analogWrite(rightMotorPWM, speed);
 }
 
 // stop
@@ -291,7 +291,7 @@ void mobotTurn(int direction, int outsidePWM, int insidePWM) {
 // spin in place
 void mobotSpin(int degrees, int pwm, int direction) {
   distance = 3.141 * 0.25 * wheelbase;
-  spinTime = int((distance / (pwm * pwmScale)) * 875);
+  spinTime = int((distance / (pwm * pwmScale)) * 1000);
   spinTime *= (degrees / 90);
 
   digitalWrite(leftMotorPhase, direction);
@@ -358,23 +358,21 @@ void junction() {
 
   // turning to/from 1
   if (routes[routeNum][routeIndex + 1] == 1) {  // to
-    mobotSpin(90, desiredPWM, !cwccw);
-    while (analogRead(osJunctionPins[!cwccw]) > 1300);
-    while (analogRead(osLinePins[1]) > 1300);
+    mobotSpin(90, desiredPWM/2, cwccw);
+    //while (analogRead(osLinePins[1]) > 2000);
     cwccw = 6 - sourceJunction;
     mobotStop();
   } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from
     cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
-    mobotSpin(90, desiredPWM, !cwccw);
-    while (analogRead(osJunctionPins[!cwccw]) <= 1300);
-    while (analogRead(osLinePins[1]) > 1300);
+    mobotSpin(90, desiredPWM/2, cwccw);
+    //while (analogRead(osLinePins[1]) > 2000);
     mobotStop();
   }
 
   // flip direction if facing wrong way
   if (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][!cwccw]) {
-    mobotSpin(180, desiredPWM, cwccw);
-    while (analogRead(osJunctionPins[cwccw]) > 1100);
+    mobotSpin(180, desiredPWM/2, cwccw);
+    //while (analogRead(osLinePins[1]) > 2000);
     mobotStop();
     cwccw = !cwccw;
   }
@@ -449,23 +447,24 @@ int lineFollowPoll() {
   average = (sum - lineAnalogValues[1]) / 4;  // average of side optical sensors
 
   // decision. may need to adjust comparison values dependent on light
-  if ((average >= 2600) && (lineAnalogValues[1] > 3600)) {  // at junction
+  if ((average >= 2400) && (lineAnalogValues[1] > 3400)) {  // at junction
     state = 3000;
-  } else if (lineAnalogValues[1] > 3600) {  // middle sensor on line, drive forward
+  } else if (lineAnalogValues[1] > 3750) {  // middle sensor on line, drive forward
     state = 3001;
+  } else if (sum < 1000) {
+    state = 3002;
   } else {  // PID
-    weight = (-2.5 * junctionAnalogValues[0] - 1.0 * lineAnalogValues[0] + 0.0 * lineAnalogValues[1] + 1.0 * lineAnalogValues[2] + 2.5 * junctionAnalogValues[1]) / sum;
+    weight = ((-5.0*junctionAnalogValues[0] - 1.0*lineAnalogValues[0] + 0.0*lineAnalogValues[1] + 0.7*lineAnalogValues[2] + 4.3*junctionAnalogValues[1]) / sum);
     error = 0.0 - weight;
     now = millis();
-    dt = (now - lastTime);
+    dt = (now - lastTime) / 1000.0;
     derivative = (error - lastError) / (dt);
-    integral += error * (dt / 1000.0);
+    integral += error * (dt);
     lastTime = now;
     lastError = error;
 
-    state = int(error * Kp) + int(derivative * Kd) + int(integral * Ki);
+    state = int(error * Kp + derivative * Kd + integral * Ki);
   }
-
   return state;
 }
 
@@ -478,6 +477,8 @@ void lineFollowAction(int pwm) {
     mobotDrive(1, desiredPWM);
     usServo.write(90);
     delay(2);
+  } else if (pwm >= 3002) {
+    pwm += 1;
   } else {  // turn dependent on location of line along sensors
     mobotTurn(0, constrain(desiredPWM + pwm, 0, 255), constrain(desiredPWM - pwm, 0, 255));
     usServo.write(180 - constrain(90 + (90*(float)pwm/200),0,180));
@@ -500,14 +501,14 @@ void endSequence() {
   if (millis() - startTime < 3000) {
     dist = 10.0;
     usServo.write(90);
-    mobotSpin(150,desiredPWM,(swing + 40) / 40);
-    mobotTurn(0, desiredPWM - 7, desiredPWM);
-    delay(1000);
-    mobotSpin(150,desiredPWM,!((swing + 40) / 40));
-    mobotTurn(0, desiredPWM - 7, desiredPWM);
+    mobotSpin(90,desiredPWM/2,(swing + 40) / 40);
+    mobotTurn(0, desiredPWM, desiredPWM);
+    delay(750);
+    mobotSpin(90,desiredPWM/2,!((swing + 40) / 40));
+    mobotTurn(0, desiredPWM, desiredPWM);
     while (dist > 4.5) {
       dist = usPing();
-      delay(20);
+      delay(25);
     }
   }
   
@@ -524,7 +525,7 @@ void endSequence() {
 void obstacleCheck() {
   float dist = 10.0;
   newObstacleCheck = millis();
-  if ((newObstacleCheck - lastObstacleCheck) >= 60) {
+  if ((newObstacleCheck - lastObstacleCheck) >= 80) {
     dist = usPing();
     if (dist < 7.0) {
       if (obstacles[0][0] == -1) {
@@ -535,7 +536,8 @@ void obstacleCheck() {
         obstacles[1][1] = routes[routeNum][routeIndex + 1];
       }
       mobotSpin(180, desiredPWM, !cwccw);
-      while (analogRead(osJunctionPins[!cwccw]) > 700);
+      while (analogRead(osJunctionPins[!cwccw]) > 1700);
+      while (analogRead(osLinePins[1] > 1700));
       mobotStop();
       cwccw = !cwccw;
       obstacleFlag = 1;
