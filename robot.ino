@@ -25,6 +25,8 @@ static const char* SERVER_HOST = "3.250.38.184";
 static const uint16_t SERVER_PORT = 8000;
 static const int GROUP_NO = 18;
 
+// two unnamed track nodes given 5/6 for navigation simplicity, 
+// rename wall node
 int normalizeNode(int n) {
   if (n == 5) return 7;
   return n;
@@ -207,7 +209,7 @@ Servo usServo;
 int lineAnalogValues[3] = { 0, 0, 0 };
 int junctionAnalogValues[2] = { 0, 0 };
 
-// physical dimensions
+// turning in place
 int wheelbase = 136;  // mm
 float distance = 0;
 int spinTime = 0;
@@ -215,17 +217,16 @@ float pwmScale = 1.5;
 float weight, sum, average = 0;
 
 // PID control/speed values
-// 145, 220, 10, 0
 int desiredPWM = 170;  // 0-255
-float Kp = 100.0;      // 220
-float Kd = 0.0;      // 10
-float Ki = 0.0;       // 0.5
+float Kp = 100.0;     
+float Kd = 0.0;     
+float Ki = 0.0;      
 double derivative, integral = 1.0;
 double dt = 0;
 unsigned long now, lastTime = 0;
 float error, lastError = 0.0;
 
-// map, index is junction, clockwise, counterclockwise, third (if there is a 3rd adjacent)
+// map, index is junction, clockwise, counterclockwise, third (if there is a 3rd adjacent junction)
 int junctions[7][3] = { { 4, 6, -1 }, { 5, 6, -1 }, { 6, 3, -1 }, { 2, 5, -1 }, { 5, 0, -1 }, { 3, 4, 1 }, { 0, 2, 1 } };
 int routes[4][8] = {  // maximum routes, maximum stops in a route. last reserved for length
   { -1, -1, -1, -1, -1, -1, -1, 0 },
@@ -233,8 +234,8 @@ int routes[4][8] = {  // maximum routes, maximum stops in a route. last reserved
   { -1, -1, -1, -1, -1, -1, -1, 0 },
   { -1, -1, -1, -1, -1, -1, -1, 0 }
 };
-int routeNum = 0;
-int routeIndex = 0;
+int routeNum = 0; // which route
+int routeIndex = 0; // which junction in route
 int cwccw = 1;  // clockwise/counter clockwise
 
 // route calculation
@@ -244,24 +245,26 @@ int path_len = 0;
 int shortest = 10;
 
 // junction tracking
-int sourceJunction = -1;
-int destinationJunction = 0;
-int endFlag = 0;
-int obstacles[2][2] = {
+int sourceJunction = -1; // -1 for start flag
+int destinationJunction = 0; // start going to 0
+int endFlag = 0; // parking flag
+int obstacles[2][2] = { // obstacle locations
   {-1,-1},
   {-1,-1}
 };
-unsigned long lastObstacleCheck = 0;
+unsigned long lastObstacleCheck = 0; // ultrasonic delay trackers
 unsigned long newObstacleCheck = 0;
 int obstacleFlag = 0;
 
-int state = 256;
+// robot state (0-255 for turning (pwm), 3000/3001 for other)
+int state = 256; 
 
 // move forward/back
 void mobotDrive(int direction, int speed) {
   digitalWrite(leftMotorPhase, direction);
   analogWrite(leftMotorPWM, speed);
 
+  // motors are mirrored so opposite direction
   digitalWrite(rightMotorPhase, !direction);
   analogWrite(rightMotorPWM, speed);
 }
@@ -288,7 +291,7 @@ void mobotTurn(int direction, int outsidePWM, int insidePWM) {
   }
 }
 
-// spin in place
+// spin in place, approximate angle, designed to undershoot
 void mobotSpin(int degrees, int pwm, int direction) {
   distance = 3.141 * 0.25 * wheelbase;
   spinTime = int((distance / (pwm * pwmScale)) * 1000);
@@ -299,6 +302,7 @@ void mobotSpin(int degrees, int pwm, int direction) {
   digitalWrite(rightMotorPhase, direction);
   analogWrite(rightMotorPWM, pwm);
 
+  // delay until turn complete
   delay(spinTime);
 }
 
@@ -306,15 +310,16 @@ void mobotSpin(int degrees, int pwm, int direction) {
 void junction() {
   mobotDrive(1, desiredPWM);
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(150); // 150
+  delay(150); // overshoot so robot doesnt get stuck
   mobotStop();
+
   // start (facing 0 from 4)
   if (sourceJunction == -1) {
     sourceJunction = 0;
     destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, 0);
     bestRoute(sourceJunction, destinationJunction);
   } else {
-    if (obstacleFlag) {
+    if (obstacleFlag) { // find other route
       routeIndex = 0;
       bestRoute(sourceJunction, destinationJunction);
       obstacleFlag = 0;
@@ -324,8 +329,8 @@ void junction() {
       sourceJunction = routes[routeNum][routeIndex];
 
       if (sourceJunction == destinationJunction) {  // path complete
-        if (endFlag) {
-          if (sourceJunction == 1) {
+        if (endFlag) { // if wall parking, start from 5 for runup
+          if (sourceJunction == 1) { 
             routeIndex = 0;
             destinationJunction = 5;
             bestRoute(sourceJunction, destinationJunction);
@@ -337,19 +342,20 @@ void junction() {
           // communicate with server, get new destination
           routeIndex = 0;
           destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
+          // if already on destination
           if (sourceJunction == destinationJunction) {
             destinationJunction = postArrivedAndGetNextTarget(GROUP_NO, sourceJunction);
           }
-
+          // if wall parking, go to 1 then 5
           if (destinationJunction == 7) {
             if (sourceJunction == 1) {
               destinationJunction = 5;
             } else {
               destinationJunction = 1;
             }
-            endFlag = 1;
+            endFlag = 1; // set for activating endSequence()
           }
-
+        // find route
         bestRoute(sourceJunction, destinationJunction);
         }
       }
@@ -357,24 +363,25 @@ void junction() {
   }
 
   // turning to/from 1
-  if (routes[routeNum][routeIndex + 1] == 1) {  // to
+  if (routes[routeNum][routeIndex + 1] == 1) {  // to 1
     mobotSpin(90, desiredPWM/2, cwccw);
-    //while (analogRead(osLinePins[1]) > 2000);
-    cwccw = 6 - sourceJunction;
+    while (analogRead(osLinePins[1]) > 1700); // wait until seeing line
+    cwccw = 6 - sourceJunction; // update direction
     mobotStop();
-  } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from
-    cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]);
+  } else if ((sourceJunction == 5 || sourceJunction == 6) && routes[routeNum][routeIndex - 1] == 1) {  // from 1
+    cwccw = (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][1]); // update direction
     mobotSpin(90, desiredPWM/2, cwccw);
-    //while (analogRead(osLinePins[1]) > 2000);
+    while (analogRead(osLinePins[1]) > 1700); // wait until seeing line
     mobotStop();
   }
 
   // flip direction if facing wrong way
+  // if next junction in route == junction in opposite direction
   if (routes[routeNum][routeIndex + 1] == junctions[sourceJunction][!cwccw]) {
     mobotSpin(180, desiredPWM/2, cwccw);
-    //while (analogRead(osLinePins[1]) > 2000);
+    while (analogRead(osLinePins[1]) > 1700);
     mobotStop();
-    cwccw = !cwccw;
+    cwccw = !cwccw; // flip direction to correct
   }
 
   // drive and mark lastTime for PID
@@ -392,7 +399,7 @@ void findRoutes(int current, int destination) {
   if (current == destination) {  // route found
     for (int i = 0; i < path_len; i++) {
       routes[routeNum][i] = path[i];
-      routes[routeNum][7] += 1;
+      routes[routeNum][7] += 1; // length
     }
     routeNum += 1;
   } else {
@@ -412,24 +419,28 @@ void findRoutes(int current, int destination) {
 
 void bestRoute(int src, int dest) {
   routeNum = 0;
-  findRoutes(src, dest);
+  findRoutes(src, dest); // find all routes
   shortest = 10;
   for (int i = 0; i < 4; i++) {
     for (int j = 0; j < 6; j++) {
+      // if not found destination in route yet, check for obstacle
       if (routes[i][j] != destinationJunction) {
+        // set length to inf if obstacle along route
         if (((routes[i][j] == obstacles[0][0]) && (routes[i][j + 1] == obstacles[0][1])) || ((routes[i][j] == obstacles[0][1]) && (routes[i][j + 1] == obstacles[0][0]))) {
           routes[i][7] = 999;
         } else if (((routes[i][j] == obstacles[1][0]) && (routes[i][j + 1] == obstacles[1][1])) || ((routes[i][j] == obstacles[1][1]) && (routes[i][j + 1] == obstacles[1][0]))) {
           routes[i][7] = 999;
         }
       } else {
-        j = 7;
+        j = 7; // exit for loop, reached destination
       }
     }
+    // update shortest route
     if ((routes[i][7] < shortest) && (routes[i][7] > 0)) {
       shortest = routes[i][7];
       routeNum = i;
     }
+    // reset for next findRoutes() call
     routes[i][7] = 0;
   }
 }
@@ -454,6 +465,7 @@ int lineFollowPoll() {
   } else if (sum < 1000) {
     state = 3002;
   } else {  // PID
+    // constants for turning sensitivity, hard coded based on desired turn and inherent sensor sensitivity
     weight = ((-5.0*junctionAnalogValues[0] - 1.0*lineAnalogValues[0] + 0.0*lineAnalogValues[1] + 0.7*lineAnalogValues[2] + 4.3*junctionAnalogValues[1]) / sum);
     error = 0.0 - weight;
     now = millis();
@@ -477,44 +489,63 @@ void lineFollowAction(int pwm) {
     mobotDrive(1, desiredPWM);
     usServo.write(90);
     delay(2);
-  } else if (pwm >= 3002) {
-    pwm += 1;
   } else {  // turn dependent on location of line along sensors
     mobotTurn(0, constrain(desiredPWM + pwm, 0, 255), constrain(desiredPWM - pwm, 0, 255));
+    // turn servo to look at line
     usServo.write(180 - constrain(90 + (90*(float)pwm/200),0,180));
     delay(2);
   }
 }
 
+// parking at wall
 void endSequence() {
-  mobotTurn(0, desiredPWM - 7, desiredPWM);
+  mobotTurn(0, desiredPWM - 7, desiredPWM); // straight line
   float dist = 10.0;
-  int swing = 40;
+  int swing = 40; // servo swing angle
+  int swingDirection = 1;
   unsigned long startTime = millis();
+  int avoidDirection = 0; // what way to avoid obstacle
 
-  while (dist > 4.5) {
+  while (dist > 6.5) { // allow for stopping distance
     dist = usPing();
-    usServo.write(90 + swing);
-    swing = -swing;
+    usServo.write(90 + swingDirection*swing);
+    if (abs(swing) >= 40) { // if at edge, swap direction
+      swingDirection = -swingDirection;
+    }
+    swing += 5*swingDirection;
     delay(20);
   }
+  // if too little time passed, obstacle is not wall
   if (millis() - startTime < 3000) {
-    dist = 10.0;
+    // determine what way to avoid obstacle if another is in the way (between junctions 4 and 5 (unnamed adjacent)
+    avoidDirection = (obstacles[0] == [4,5]) || (obstacles[0] == [5,4])
+    avoidDirection = avoidDirection || (obstacles[1] == [4,5]) || (obstacles[1] == [5,4])
+    dist = 10.0; // reset value
     usServo.write(90);
-    mobotSpin(90,desiredPWM/2,(swing + 40) / 40);
-    mobotTurn(0, desiredPWM, desiredPWM);
+    // move around obstacle (hardcoded)
+    mobotDrive(0,desiredPWM); // reverse a bit
+    delay(100);
+    mobotSpin(90,desiredPWM/2,!avoidDirection);
+    mobotStop();
+    delay(30);
+    mobotDrive(1,desiredPWM);
     delay(750);
-    mobotSpin(90,desiredPWM/2,!((swing + 40) / 40));
-    mobotTurn(0, desiredPWM, desiredPWM);
+    mobotStop();
+    mobotSpin(90,desiredPWM/2,avoidDirection);
+    mobotStop();
+    delay(30);
+    mobotDrive(1,desiredPWM);
     while (dist > 4.5) {
       dist = usPing();
-      delay(25);
+      delay(30);
     }
+  } else {
+    delay(80); // get closer to wall
   }
   
   mobotStop();
   postArrivedAndGetNextTarget(GROUP_NO, 5);
-  while (1) {
+  while (1) { // indicate finished
     digitalWrite(LED_BUILTIN, HIGH);
     delay(500);
     digitalWrite(LED_BUILTIN, LOW);
@@ -525,9 +556,11 @@ void endSequence() {
 void obstacleCheck() {
   float dist = 10.0;
   newObstacleCheck = millis();
-  if ((newObstacleCheck - lastObstacleCheck) >= 80) {
+  // if 80ms has passed since last obstacle check, execute another: to prevent delay from impeding line following
+  if ((newObstacleCheck - lastObstacleCheck) >= 80) { 
     dist = usPing();
     if (dist < 7.0) {
+      // store obstacle location
       if (obstacles[0][0] == -1) {
         obstacles[0][0] = routes[routeNum][routeIndex];
         obstacles[0][1] = routes[routeNum][routeIndex + 1];
@@ -535,22 +568,23 @@ void obstacleCheck() {
         obstacles[1][0] = routes[routeNum][routeIndex];
         obstacles[1][1] = routes[routeNum][routeIndex + 1];
       }
-      mobotSpin(180, desiredPWM, !cwccw);
-      while (analogRead(osJunctionPins[!cwccw]) > 1700);
+      mobotSpin(180, desiredPWM, !cwccw); // turn around
       while (analogRead(osLinePins[1] > 1700));
       mobotStop();
       cwccw = !cwccw;
-      obstacleFlag = 1;
+      obstacleFlag = 1; // for junction logic
     }
 
-    lastObstacleCheck = millis();
+    lastObstacleCheck = millis(); // record event
   }
 }
 
+// ultrasonic ping
 float usPing() {
   float proximity = 0;
   float response = 0;
 
+  // pulse sequence
   digitalWrite(dsTriggerPin, LOW);
   delayMicroseconds(2);
   digitalWrite(dsTriggerPin, HIGH);
@@ -558,8 +592,8 @@ float usPing() {
   digitalWrite(dsTriggerPin, LOW);
 
   response = pulseIn(dsEchoPin,HIGH);
-  proximity = response * 0.017f;
-  if (response <= 0) {
+  proximity = response * 0.017f; // convert to distance
+  if (response <= 0) { // incorrect reading
     proximity = 10.0;
   }
   return proximity;
